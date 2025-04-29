@@ -12,6 +12,8 @@
 // SDL Audio capture
 //
 
+enum BufferState { EMPTY, PARTIAL, FULL };
+
 class audio_async {
 public:
     audio_async(int len_ms);
@@ -29,7 +31,7 @@ public:
     void callback(uint8_t * stream, int len);
 
     // get audio data from the circular buffer
-    void get(int ms, std::vector<float> & audio);
+    bool get(int ms, std::vector<float> & audio);
 
 private:
     SDL_AudioDeviceID m_dev_id_in = 0;
@@ -43,6 +45,23 @@ private:
     std::vector<float> m_audio;
     size_t             m_audio_pos = 0;
     size_t             m_audio_len = 0;
+
+    std::vector<float> m_buf_1;
+    std::vector<float> m_buf_2;
+    size_t bufferSize = 0;
+    size_t buf1WriteIndex = 0;
+    size_t buf2WriteIndex = 0;
+    size_t readIndex = 0;
+
+    std::atomic<bool> buffered {false};
+    std::atomic<bool> buf1Write {false};
+    std::atomic<bool> buf1Read {false};
+
+    std::mutex       m_mutex_1;
+    std::mutex       m_mutex_2;
+
+    BufferState state1 = EMPTY;
+    BufferState state2 = EMPTY;
 };
 
 // Return false if need to quit

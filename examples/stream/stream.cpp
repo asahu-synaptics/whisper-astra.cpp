@@ -13,6 +13,10 @@
 #include <vector>
 #include <fstream>
 
+#include <chrono>
+#include <iostream>
+
+using namespace std;
 
 // command-line parameters
 struct whisper_params {
@@ -239,19 +243,18 @@ int main(int argc, char ** argv) {
 
         // process new audio
 
+
+        bool ret;
         if (!use_vad) {
             while (true) {
-                audio.get(params.step_ms, pcmf32_new);
-
-                if ((int) pcmf32_new.size() > 2*n_samples_step) {
-                    fprintf(stderr, "\n\n%s: WARNING: cannot process audio fast enough, dropping audio ...\n\n", __func__);
-                    audio.clear();
-                    continue;
-                }
+                ret = audio.get(params.step_ms, pcmf32_new);
 
                 if ((int) pcmf32_new.size() >= n_samples_step) {
-                    audio.clear();
                     break;
+                }
+
+                if (!ret) {
+                    continue;
                 }
 
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -260,9 +263,8 @@ int main(int argc, char ** argv) {
             const int n_samples_new = pcmf32_new.size();
 
             // take up to params.length_ms audio from previous iteration
-            const int n_samples_take = std::min((int) pcmf32_old.size(), std::max(0, n_samples_keep + n_samples_len - n_samples_new));
-
-            //printf("processing: take = %d, new = %d, old = %d\n", n_samples_take, n_samples_new, (int) pcmf32_old.size());
+            // const int n_samples_take = std::min((int) pcmf32_old.size(), std::max(0, n_samples_keep + n_samples_len - n_samples_new));
+            const int n_samples_take = 0;
 
             pcmf32.resize(n_samples_new + n_samples_take);
 
@@ -321,7 +323,7 @@ int main(int argc, char ** argv) {
             wparams.prompt_tokens    = params.no_context ? nullptr : prompt_tokens.data();
             wparams.prompt_n_tokens  = params.no_context ? 0       : prompt_tokens.size();
 
-            if (whisper_full(ctx, wparams, pcmf32.data(), pcmf32.size()) != 0) {
+            if (whisper_full(ctx, wparams, pcmf32_new.data(), pcmf32_new.size()) != 0) {
                 fprintf(stderr, "%s: failed to process audio\n", argv[0]);
                 return 6;
             }

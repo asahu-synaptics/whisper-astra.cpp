@@ -1,5 +1,10 @@
 #include "common-sdl.h"
 
+#include <iostream>
+
+using namespace std;
+
+
 audio_async::audio_async(int len_ms) {
     m_len_ms = len_ms;
 
@@ -73,6 +78,10 @@ bool audio_async::init(int capture_id, int sample_rate) {
 
     m_audio.resize((m_sample_rate*m_len_ms)/1000);
 
+    bufferSize = (m_sample_rate*m_len_ms)/1000;
+    m_buf_1.resize(bufferSize);
+    m_buf_2.resize(bufferSize);
+
     return true;
 }
 
@@ -141,75 +150,105 @@ void audio_async::callback(uint8_t * stream, int len) {
 
     size_t n_samples = len / sizeof(float);
 
-    if (n_samples > m_audio.size()) {
-        n_samples = m_audio.size();
-
+    if (n_samples > bufferSize) {
+        n_samples = bufferSize;
         stream += (len - (n_samples * sizeof(float)));
     }
 
-    //fprintf(stderr, "%s: %zu samples, pos %zu, len %zu\n", __func__, n_samples, m_audio_pos, m_audio_len);
-
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-
-        if (m_audio_pos + n_samples > m_audio.size()) {
-            const size_t n0 = m_audio.size() - m_audio_pos;
-
-            memcpy(&m_audio[m_audio_pos], stream, n0 * sizeof(float));
-            memcpy(&m_audio[0], stream + n0 * sizeof(float), (n_samples - n0) * sizeof(float));
-
-            m_audio_pos = (m_audio_pos + n_samples) % m_audio.size();
-            m_audio_len = m_audio.size();
+    if (!buffered.load()) {
+        std::unique_lock<std::mutex> lock(m_mutex_2);
+        memcpy(&m_buf_2[buf2WriteIndex], stream, n_samples * sizeof(float));
+        buf2WriteIndex += n_samples;
+        if (buf2WriteIndex >= bufferSize/2) {
+            state2 = FULL;
+            buffered.store(true);
+            buf1Read.store(false);
+            // cout << "eniac: buffered" << endl;
         } else {
-            memcpy(&m_audio[m_audio_pos], stream, n_samples * sizeof(float));
+            state2 = PARTIAL;
+        }
+        return;
+    }
 
-            m_audio_pos = (m_audio_pos + n_samples) % m_audio.size();
-            m_audio_len = std::min(m_audio_len + n_samples, m_audio.size());
+    if (buf1Write.load()) {
+        std::unique_lock<std::mutex> lock(m_mutex_1);
+        // cout << "eniac: writing to buffer 1" << endl;
+        memcpy(&m_buf_1[buf1WriteIndex], stream, n_samples * sizeof(float));
+        buf1WriteIndex += n_samples;
+        if (buf1WriteIndex >= bufferSize) {
+            state1 = FULL;
+            // cout << "eniac: [WR] m_buf_1 is full switching!!! " << endl;
+        } else {
+            state1 = PARTIAL;
+        }
+    } else if (!buf1Write.load()) {
+        std::unique_lock<std::mutex> lock(m_mutex_2);
+        // cout << "eniac: writing to buffer 2" << endl;
+        memcpy(&m_buf_2[buf2WriteIndex], stream, n_samples * sizeof(float));
+        buf2WriteIndex += n_samples;
+        if (buf2WriteIndex >= bufferSize) {
+            state2 = FULL;
+            // cout << "eniac: [WR] m_buf_2 is full switching!!! " << endl;
+        } else {
+            state2 = PARTIAL;
         }
     }
 }
 
-void audio_async::get(int ms, std::vector<float> & result) {
+bool audio_async::get(int ms, std::vector<float> & result) {
     if (!m_dev_id_in) {
         fprintf(stderr, "%s: no audio device to get audio from!\n", __func__);
-        return;
+        return false;
     }
 
     if (!m_running) {
         fprintf(stderr, "%s: not running!\n", __func__);
-        return;
+        return false;
     }
 
     result.clear();
 
+    if (ms <= 0) {
+        ms = m_len_ms;
+    }
+
+    size_t n_samples = (m_sample_rate * ms) / 1000;
+    if (n_samples > bufferSize) {
+        n_samples = bufferSize;
+    }
+
+    if (!buffered.load()) {
+        return false;
+    }
+
+    if (buf1Read.load())
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-
-        if (ms <= 0) {
-            ms = m_len_ms;
+        std::unique_lock<std::mutex> lock(m_mutex_1);
+        if (state1 != EMPTY && buf1WriteIndex >= n_samples) {
+            buf1Read.store(false);
+            buf1Write.store(false);
+            result.resize(buf1WriteIndex);
+            memcpy(result.data(), &m_buf_1[0], buf1WriteIndex * sizeof(float));
+            state1 = EMPTY;
+            // cout << "eniac: [RD] m_buf_1: read fully !!! writeIndex of m_buf_1 = " << buf1WriteIndex << endl;
+            buf1WriteIndex = 0;
+            return true;
         }
-
-        size_t n_samples = (m_sample_rate * ms) / 1000;
-        if (n_samples > m_audio_len) {
-            n_samples = m_audio_len;
-        }
-
-        result.resize(n_samples);
-
-        int s0 = m_audio_pos - n_samples;
-        if (s0 < 0) {
-            s0 += m_audio.size();
-        }
-
-        if (s0 + n_samples > m_audio.size()) {
-            const size_t n0 = m_audio.size() - s0;
-
-            memcpy(result.data(), &m_audio[s0], n0 * sizeof(float));
-            memcpy(&result[n0], &m_audio[0], (n_samples - n0) * sizeof(float));
-        } else {
-            memcpy(result.data(), &m_audio[s0], n_samples * sizeof(float));
+    } else if (!buf1Read.load()) {
+        std::unique_lock<std::mutex> lock(m_mutex_2);
+        if (state2 != EMPTY && buf2WriteIndex >= n_samples) {
+            buf1Read.store(true);
+            buf1Write.store(true);
+            result.resize(buf2WriteIndex);
+            memcpy(result.data(), &m_buf_2[0], buf2WriteIndex * sizeof(float));
+            state2 = EMPTY;
+            // cout << "eniac: [RD] m_buf_2: read fully !!! writeIndex of m_buf_2 = " << buf2WriteIndex << endl;
+            buf2WriteIndex = 0;
+            return true;
         }
     }
+
+    return false;
 }
 
 bool sdl_poll_events() {

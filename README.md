@@ -1,5 +1,21 @@
-# whisper.cpp
+# Whisper-Astra
 
+This repository is based on [whisper.cpp](https://github.com/ggml-org/whisper.cpp). It has been specifically adapted and optimized for streaming on the **Astra SL series processors**.
+
+Development was carried out with the support and contributions from  [@hpbenny](https://github.com/hpbenny).
+
+
+This commit ensures compatibility and stability as of **June 26, 2024** from **ggml + fix sync script** commit. Commit details:
+
+```
+commit c118733a29ad4a984015a5c08fd585086d01087a (HEAD -> master)
+Date: Wed Jun 26 23:20:19 2024 +0300
+
+sync : ggml + fix sync script
+```
+Note: The original `whisper.cpp` project continues to evolve beyond this point.
+
+---
 ![whisper.cpp](https://user-images.githubusercontent.com/1991296/235238348-05d0f6a4-da44-4900-a1de-d0707e75b763.jpeg)
 
 [![Actions Status](https://github.com/ggerganov/whisper.cpp/workflows/CI/badge.svg)](https://github.com/ggerganov/whisper.cpp/actions)
@@ -68,7 +84,7 @@ The tensor operators are optimized heavily for Apple silicon CPUs. Depending on 
 First clone the repository:
 
 ```bash
-git clone https://github.com/ggerganov/whisper.cpp.git
+git clone https://github.com/asahu-synaptics/whisper.cpp.git
 ```
 
 Then, download one of the Whisper [models](models/README.md) converted in [`ggml` format](#ggml-format). For example:
